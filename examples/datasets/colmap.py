@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from typing_extensions import assert_never
 
@@ -15,6 +16,18 @@ from .normalize import (
     transform_cameras,
     transform_points,
 )
+
+
+def load_exr(path: str):
+    assert Path(path).exists() and Path(path).suffix == ".exr", path
+    return cv2.imread(str(path), cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+
+
+def load_depth(p: str):
+    depth = load_exr(p)
+    if len(depth.shape) == 3:
+        depth = depth[..., 0]
+    return depth
 
 
 def _get_rel_paths(path_dir: str) -> List[str]:
@@ -308,16 +321,27 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
+        load_depths_rgbd: bool = False,
+        depths_rgbd_extension: str = ".exr",  # "exr" or "npy" or "png"
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
+        self.load_depths_rgbd = load_depths_rgbd
+        self.depths_rgbd_extension = depths_rgbd_extension
+        assert not (load_depths and load_depths_rgbd), ("Please choose one of load_depths (sparse dpeth from COLMAP SfM)"
+                                                        " or load_depths_rgbd (where dense depths are stored as images).")
+        assert depths_rgbd_extension in [".exr", ".npy", ".png"], "depths_rgbd_extension must be 'exr' or 'npy' or 'png'."
         indices = np.arange(len(self.parser.image_names))
-        if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
+        # If test_every <= 0, use the whole dataset as both train and test set.
+        if self.parser.test_every > 0:
+            if split == "train":
+                self.indices = indices[indices % self.parser.test_every != 0]
+            else:
+                self.indices = indices[indices % self.parser.test_every == 0]
         else:
-            self.indices = indices[indices % self.parser.test_every == 0]
+            self.indices = indices
 
     def __len__(self):
         return len(self.indices)
@@ -381,6 +405,22 @@ class Dataset:
             depths = depths[selector]
             data["points"] = torch.from_numpy(points).float()
             data["depths"] = torch.from_numpy(depths).float()
+        elif self.load_depths_rgbd:
+            image_path, image_extension = os.path.splitext(self.parser.image_paths[index])
+            rgbd_path = image_path + '_depth' + self.depths_rgbd_extension
+            if self.depths_rgbd_extension == ".exr":
+                depths_rgbd = load_depth(rgbd_path)
+            elif self.depths_rgbd_extension == ".npy":
+                depths_rgbd = np.load(rgbd_path)
+            elif self.depths_rgbd_extension == ".png":
+                depths_rgbd = imageio.imread(rgbd_path)
+                if len(depths_rgbd.shape) == 3:
+                    depths_rgbd = depths_rgbd[..., 0]
+            else:
+                raise ValueError(f"Unknown depths_rgbd_extension: {self.depths_rgbd_extension}")
+            assert len(depths_rgbd.shape) == 2 and depths_rgbd.shape[:2] == image.shape[:2], \
+                f'depths_rgbd must have shape (H, W), but it has shape {depths_rgbd.shape}.'
+            data['depths_rgbd'] = torch.from_numpy(depths_rgbd).float()  # (H, W)
 
         return data
 
