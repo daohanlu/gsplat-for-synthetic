@@ -44,8 +44,6 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
 
-os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
-
 
 @dataclass
 class Config:

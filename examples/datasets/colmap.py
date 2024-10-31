@@ -1,13 +1,14 @@
 import os
+os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from typing_extensions import assert_never
 
 import cv2
-import imageio.v2 as imageio
 import numpy as np
 import torch
+import OpenEXR
 from pycolmap import SceneManager
 
 from .normalize import (
@@ -18,9 +19,17 @@ from .normalize import (
 )
 
 
-def load_exr(path: str):
-    assert Path(path).exists() and Path(path).suffix == ".exr", path
-    return cv2.imread(str(path), cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+def load_exr(p: str):
+    with OpenEXR.File(p) as infile:
+        header = infile.header()
+        depth = None
+        if 'V' in infile.channels():  # Not sure why it's called 'V' when saved directly from Blender
+            depth = infile.channels()['V'].pixels
+        elif 'Y' in infile.channels():  # Y: luminance
+            depth = infile.channels()['Y'].pixels
+        # height, width = depth.shape[0:2]
+        assert depth is not None and depth.dtype == np.float32
+    return depth
 
 
 def load_depth(p: str):
@@ -407,7 +416,7 @@ class Dataset:
             data["depths"] = torch.from_numpy(depths).float()
         elif self.load_depths_rgbd:
             image_path, image_extension = os.path.splitext(self.parser.image_paths[index])
-            rgbd_path = image_path + '_depth' + self.depths_rgbd_extension
+            rgbd_path = image_path + self.depths_rgbd_extension
             if self.depths_rgbd_extension == ".exr":
                 depths_rgbd = load_depth(rgbd_path)
             elif self.depths_rgbd_extension == ".npy":
